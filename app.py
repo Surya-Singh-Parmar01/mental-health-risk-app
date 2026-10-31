@@ -5,8 +5,11 @@ Interactive Streamlit app  --  run with:  streamlit run app.py
 Needs in the same folder:  risk_model_final.pkl, label_encoder_final.pkl, presets.json
 """
 
+import base64
 import json
 import os
+import re
+import time
 
 import joblib
 import numpy as np
@@ -22,9 +25,9 @@ st.markdown(
     <style>
     section[data-testid="stSidebar"] {min-width: 420px; max-width: 480px;}
     .risk-card {padding: 22px; border-radius: 16px; text-align: center;}
-    .risk-card .lbl {font-size: 14px; color: #666;}
+    .risk-card .lbl {font-size: 15px; opacity: 0.9;}
     .risk-card .val {font-size: 46px; font-weight: 800; line-height: 1.1;}
-    .tip {padding: 12px 16px; border-left: 4px solid #1565c0; background: #1565c011;
+    .tip {padding: 12px 16px; border-left: 5px solid #4C9AFF; background: rgba(76,154,255,0.14);
           border-radius: 6px; margin-bottom: 10px;}
     </style>
     """,
@@ -46,7 +49,56 @@ def load_artifacts():
     return model, label_encoder, explainer, presets
 
 
+
+# ---------------------------------------------------------------------
+# Splash screen: logo shown for 3 seconds at the start of each session.
+# Put your logo next to app.py as logo.png (jpg / jpeg / webp / svg also work).
+# ---------------------------------------------------------------------
+SPLASH_SECONDS = 3
+LOGO_FILES = ["logo.png", "logo.jpg", "logo.jpeg", "logo.webp", "logo.svg"]
+
+
+def find_logo():
+    for name in LOGO_FILES:
+        if os.path.exists(name):
+            return name
+    return None
+
+
+def logo_data_uri(path):
+    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp", "svg": "image/svg+xml"}[path.rsplit(".", 1)[1].lower()]
+    with open(path, "rb") as fh:
+        return f"data:{mime};base64," + base64.b64encode(fh.read()).decode()
+
+
+_logo = find_logo()
+splash, _t0 = None, time.time()
+if _logo and not st.session_state.get("splash_done"):
+    splash = st.empty()
+    splash.markdown(
+        "<style>@keyframes fadein{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}"
+        "@keyframes fill{from{width:0}to{width:100%}}</style>"
+        "<div style='display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "height:80vh;animation:fadein .8s ease'>"
+        "<div style='background:#ffffff;border-radius:24px;padding:20px 28px;"
+        "box-shadow:0 6px 30px rgba(0,0,0,.28)'>"
+        f"<img src='{logo_data_uri(_logo)}' style='max-height:260px;max-width:70vw;display:block'/></div>"
+        "<div style='margin-top:24px;font-size:26px;font-weight:700;text-align:center'>"
+        "Explainable Mental Health Risk Explorer</div>"
+        "<div style='margin-top:18px;width:220px;height:4px;border-radius:4px;"
+        "background:rgba(128,128,128,.35);overflow:hidden'>"
+        f"<div style='height:100%;background:#4ADE80;animation:fill {SPLASH_SECONDS}s linear forwards'></div>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
 model, label_encoder, explainer, PRESETS = load_artifacts()
+
+if splash is not None:
+    time.sleep(max(0.0, SPLASH_SECONDS - (time.time() - _t0)))
+    splash.empty()
+    st.session_state["splash_done"] = True
 FEATURES = list(model.feature_names_in_)
 CLASSES = list(label_encoder.classes_)
 
@@ -190,13 +242,60 @@ TIER_MESSAGE = {
     "Medium": "Your answers point to a moderate risk profile. Consider proactive steps such as periodic self-check-ins, guided journaling, or a preventive conversation with a counselor.",
     "High": "Your answers point to an elevated risk profile. We recommend speaking with a licensed mental health professional for a proper evaluation.",
 }
-TIER_COLOR = {"Low": "#2e7d32", "Medium": "#ef6c00", "High": "#c62828"}
+
+# ---------------------------------------------------------------------
+# Theme-aware, high-contrast palette (all colours >= 5.4:1 against the page background)
+# ---------------------------------------------------------------------
+def theme_type():
+    try:
+        t = st.context.theme.type
+        if t in ("light", "dark"):
+            return t
+    except Exception:
+        pass
+    return None
+
+
+_theme = theme_type()
+if _theme is None and not st.session_state.get("theme_retry"):
+    st.session_state["theme_retry"] = True      # the browser reports its theme after the first run
+    st.rerun()
+
+if _theme == "light":
+    PAL = {"tier": {"Low": "#1B7A3D", "Medium": "#B54708", "High": "#B71C1C"},
+           "on_bar": "#FFFFFF", "pos": "#B71C1C", "neg": "#1565C0", "text": "#1A1F27"}
+else:
+    PAL = {"tier": {"Low": "#4ADE80", "Medium": "#FFB347", "High": "#FF6B6B"},
+           "on_bar": "#0B0F14", "pos": "#FF6B6B", "neg": "#6CB4FF", "text": "#F2F5F9"}
+TIER_COLOR = PAL["tier"]
+
+
+def callout(html, color, alpha=0.16):
+    h = color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    st.markdown(
+        f"<div style='padding:14px 18px;border-radius:10px;border-left:6px solid {color};"
+        f"background:rgba({r},{g},{b},{alpha});line-height:1.55'>{html}</div>",
+        unsafe_allow_html=True)
+
+
+def show_fig(fig):
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color=PAL["text"], size=14),
+                      legend=dict(font=dict(color=PAL["text"], size=14)))
+    fig.update_xaxes(gridcolor="rgba(128,128,128,0.25)", zerolinecolor="rgba(128,128,128,0.6)")
+    fig.update_yaxes(gridcolor="rgba(128,128,128,0.25)")
+    st.plotly_chart(fig, width="stretch")
+
+
 DISCLAIMER = (
     "**Research prototype, not a diagnostic or crisis tool.** The prediction comes from a model trained on the "
     "OSMI 2016 workplace survey (about 71% accuracy on held-out data) and cannot diagnose anyone. "
     "If you are struggling or in crisis, please contact a licensed professional, a local helpline "
     "(in India, Tele-MANAS: 14416), or your local emergency number."
 )
+
+DISCLAIMER_HTML = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", DISCLAIMER)
 
 ROLE_OPTIONS = sorted({r for f in FEATURES if f.startswith("work_position_")
                        for r in f[len("work_position_"):].split("|")})
@@ -337,26 +436,28 @@ with tab_res:
     c1, c2 = st.columns([1, 1.5])
     with c1:
         st.markdown(
-            f"<div class='risk-card' style='background:{TIER_COLOR[tier]}1a;border:2px solid {TIER_COLOR[tier]}'>"
+            f"<div class='risk-card' style='background:{TIER_COLOR[tier]}29;border:2px solid {TIER_COLOR[tier]}'>"
             f"<div class='lbl'>Estimated risk level</div>"
             f"<div class='val' style='color:{TIER_COLOR[tier]}'>{tier}</div>"
             f"<div class='lbl'>{P[tier]:.0%} model confidence</div></div>",
             unsafe_allow_html=True)
         st.write("")
-        st.info(TIER_MESSAGE[tier])
+        callout(TIER_MESSAGE[tier], TIER_COLOR[tier])
     with c2:
         fig = go.Figure()
         for cls in ["Low", "Medium", "High"]:
             fig.add_trace(go.Bar(
-                y=["Probability"], x=[P[cls]], name=cls, orientation="h",
-                marker_color=TIER_COLOR[cls], text=f"{cls} {P[cls]:.0%}", textposition="inside",
-                insidetextanchor="middle", hovertemplate=f"{cls}: %{{x:.1%}}<extra></extra>"))
+                y=["Probability"], x=[P[cls]], name=f"{cls} {P[cls]:.0%}", orientation="h",
+                marker_color=TIER_COLOR[cls], text=(f"{cls} {P[cls]:.0%}" if P[cls] >= 0.12 else ""),
+                textposition="inside", insidetextanchor="middle",
+                textfont=dict(color=PAL["on_bar"], size=15),
+                hovertemplate=f"{cls}: %{{x:.1%}}<extra></extra>"))
         fig.update_layout(barmode="stack", height=170, margin=dict(l=0, r=0, t=10, b=0),
                           xaxis=dict(range=[0, 1], tickformat=".0%"), yaxis=dict(visible=False),
                           legend=dict(orientation="h", y=-0.35))
-        st.plotly_chart(fig, width="stretch")
+        show_fig(fig)
         st.caption("How the model splits its confidence across the three tiers. Hover for exact values.")
-    st.warning(DISCLAIMER)
+    callout(DISCLAIMER_HTML, "#E0A100", 0.14)
 
 # ---------------- Why ----------------
 contrib = pd.DataFrame({"feature": FEATURES, "shap": class_shap(x, pred_idx), "value": x.iloc[0].values})
@@ -368,12 +469,12 @@ with tab_why:
     top = grouped.reindex(grouped.abs().sort_values(ascending=False).index).head(10)[::-1]
     fig = go.Figure(go.Bar(
         x=top.values, y=[SHORT.get(b, b) for b in top.index], orientation="h",
-        marker_color=["#c62828" if v > 0 else "#1565c0" for v in top.values],
+        marker_color=[PAL["pos"] if v > 0 else PAL["neg"] for v in top.values],
         customdata=[answer_text(answers, b) for b in top.index],
         hovertemplate="<b>%{y}</b><br>Your answer: %{customdata}<br>Effect: %{x:+.3f}<extra></extra>"))
     fig.update_layout(height=420, margin=dict(l=0, r=10, t=10, b=0),
                       xaxis_title=f"Push toward (+) / away from (−) “{tier}”  (SHAP value)")
-    st.plotly_chart(fig, width="stretch")
+    show_fig(fig)
     st.caption("Red bars pushed the model toward this result; blue bars pushed away. Hover a bar to see your answer. "
                "Demographic items (age, gender, country, role) are shown for transparency only and never drive suggestions.")
 
@@ -447,9 +548,9 @@ with tab_what:
     lev = lev.sort_values("Change in High-risk probability (pts)").head(6)
     fig = go.Figure(go.Bar(
         x=lev["Change in High-risk probability (pts)"][::-1], y=lev["Factor"][::-1], orientation="h",
-        marker_color="#1565c0", customdata=lev["Best alternative answer"][::-1],
+        marker_color=PAL["neg"], customdata=lev["Best alternative answer"][::-1],
         hovertemplate="<b>%{y}</b><br>If answered: %{customdata}<br>Change: %{x:+.1f} pts<extra></extra>"))
     fig.update_layout(height=320, margin=dict(l=0, r=10, t=10, b=0),
                       xaxis_title="Change in High-risk probability (percentage points)")
-    st.plotly_chart(fig, width="stretch")
+    show_fig(fig)
     st.dataframe(lev, hide_index=True, width="stretch")
